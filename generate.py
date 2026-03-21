@@ -3,7 +3,9 @@ import torch.nn.functional as F
 import json
 from model import MiniLLM
 
-from tokenizer import SimpleTokenizer as RealTokenizer
+from utils.tokenizer import SimpleTokenizer as RealTokenizer
+
+VERSION = "_v2"
 
 # Загрузка модели
 def load_model(checkpoint_path, tokenizer_path, device='cuda:0'):
@@ -60,8 +62,8 @@ def generate_text(model, tokenizer, device, prompt, max_tokens=200,
 if __name__ == "__main__":
     device = 'cuda:0' if torch.cuda.is_available() else 'cpu'
     
-    checkpoint_path = "checkpoints/checkpoint_best.pt"
-    tokenizer_path = "checkpoints/tokenizer.json"
+    checkpoint_path = f"checkpoints{VERSION}/checkpoint_best.pt"
+    tokenizer_path = f"checkpoints{VERSION}/tokenizer.json"
     
     print("🔄 Загрузка модели...")
     model, params, tokenizer = load_model(checkpoint_path, tokenizer_path, device)

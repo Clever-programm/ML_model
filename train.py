@@ -2,34 +2,36 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
+import random
 import time
 import os
 import json
-from tokenizer import SimpleTokenizer
+from utils.tokenizer import SimpleTokenizer
 from model import MiniLLM
 
 # Конфигурация обучения
 class Config:
     # Данные
-    text_file = "text.txt"
+    text_file = "data.txt"
     seq_length = 64
     batch_size = 16
     
-    # Модель
+    # Модель (увеличили для лучшего качества)
     vocab_size = None
     embed_dim = 256
     n_heads = 4
-    n_layers = 6
-    dropout = 0.2
+    n_layers = 4
+    dropout = 0.1
     
     # Обучение
     learning_rate = 2e-4
-    epochs = 20
+    epochs = 50
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
     # Сохранение
-    save_dir = "checkpoints"
-    save_every = 500
+    save_dir = "checkpoints_v2"
+    save_every = 2000
+    patience = 10
 
 config = Config()
 
@@ -102,14 +104,22 @@ def generate_sample(model, tokenizer, device, prompt=""):
     return tokenizer.decode(generated[0].tolist())
 
 # Главный цикл обучения
-def train():
+def train(resume_from=None):
+
+    if resume_from:
+        checkpoint = torch.load(resume_from)
+        model.load_state_dict(checkpoint['model_state_dict'])
+        optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        global_step = checkpoint['step']
+        print(f"🔄 Продолжаем с шага {global_step}")
+
     print("=" * 60)
     print("ОБУЧЕНИЕ MINI-LLM")
     print("=" * 60)
     
-    patience = 3
-    no_improve_count = 0
     best_val_loss = float('inf')
+    no_improve_epochs = 0
+    best_checkpoint_epoch = 0
 
     # 1. Загрузка и подготовка данных
     print("\nЗагрузка данных...")
@@ -126,6 +136,16 @@ def train():
     data = torch.tensor(tokenizer.encode(text), dtype=torch.long)
     print(f"   Всего токенов: {len(data):,}")
     
+    print("\n🔀 Перемешивание данных...")
+    fragment_size = config.seq_length * 10
+    fragments = []
+    for i in range(0, len(data) - config.seq_length - 1, fragment_size):
+        fragments.append(data[i:i + fragment_size])
+    random.seed(42)
+    random.shuffle(fragments)
+    data = torch.cat(fragments, dim=0)
+    print(f"   Перемешано {len(fragments)} фрагментов")
+
     # 3. Разделение на train/val
     split_idx = int(len(data) * 0.9)
     train_data = data[:split_idx]
@@ -179,7 +199,6 @@ def train():
         epoch_start = time.time()
         total_train_loss = 0
         n_batches = 0
-        stop_training = False
         
         for batch_idx, (batch_x, batch_y) in enumerate(train_loader):
             loss = train_step(model, batch_x, batch_y, criterion, optimizer, config.device)
@@ -202,7 +221,7 @@ def train():
                 print(f"  Validation Loss: {val_loss:.4f}")
                 
                 checkpoint = {
-                    'config': {
+                    'model_params': {
                         'vocab_size': config.vocab_size,
                         'embed_dim': config.embed_dim,
                         'n_heads': config.n_heads,
@@ -222,20 +241,6 @@ def train():
                 }
                 torch.save(checkpoint, f"{config.save_dir}/checkpoint_step_{global_step}.pt")
                 
-                if val_loss < best_val_loss:
-                    best_val_loss = val_loss
-                    no_improve_count = 0
-                    torch.save(checkpoint, f"{config.save_dir}/checkpoint_best.pt")
-                    print(f"  ⭐ Новый лучший результат!")
-                else:
-                    no_improve_count += 1
-                    print(f"  ⏳ Нет улучшений ({no_improve_count}/{patience})")
-                    
-                if no_improve_count >= patience:
-                    print(f"\n🛑 Ранняя остановка! Нет улучшений {patience} эпох подряд.")
-                    stop_training = True
-                    break
-                
                 print("\n  Пример генерации:")
                 sample = generate_sample(model, tokenizer, config.device, prompt="")
                 print(f"  {sample[:200]}...")
@@ -250,8 +255,20 @@ def train():
         print(f"   Train Loss: {avg_train_loss:.4f}")
         print(f"   Val Loss:   {val_loss:.4f}")
         print(f"{'='*60}\n")
-        
-        if stop_training:
+
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
+            no_improve_epochs = 0
+            best_checkpoint_epoch = epoch + 1
+            # Сохраняем лучший чекпоинт
+            torch.save(checkpoint, f"{config.save_dir}/checkpoint_best.pt")
+            print(f"  ⭐ Новый лучший результат!")
+        else:
+            no_improve_epochs += 1
+            print(f"  ⏳ Нет улучшений {no_improve_epochs}/{config.patience} эпох")
+
+        if no_improve_epochs >= config.patience:
+            print(f"\n🛑 Ранняя остановка! Лучшая эпоха: {best_checkpoint_epoch}")
             break
     
     # Финальное сохранение

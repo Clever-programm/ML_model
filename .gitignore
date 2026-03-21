@@ -1,2 +1,3 @@
-*.pt
+checkpoint_step_*.pt
 *.pyc
+*.txt
